@@ -49,7 +49,7 @@ namespace Subscriber
                             JsonSerializer.Serialize(message.Value),
                             message.TopicPartitionOffset);
                         
-                        _consumer.Commit();
+                        _consumer.Commit(); // note: committing every time can have a negative impact on performance
                     }
                 },
                 TaskCreationOptions.LongRunning);
