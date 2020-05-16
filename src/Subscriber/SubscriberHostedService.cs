@@ -1,3 +1,4 @@
+using System;
 using System.Threading;
 using System.Threading.Tasks;
 using Confluent.Kafka;
@@ -33,32 +34,67 @@ namespace Subscriber
         }
 
         protected override Task ExecuteAsync(CancellationToken stoppingToken)
-            => Task.Factory.StartNew(() =>
-                {
-                    _logger.LogInformation("Subscribing");
-                    _consumer.Subscribe("test-topic");
+        {
+            _logger.LogInformation("Subscribing");
+            _consumer.Subscribe("test-topic");
+            
+            var tcs = new TaskCompletionSource<bool>();
 
-                    while (!stoppingToken.IsCancellationRequested)
+            // polling for messages is a blocking operation,
+            // so spawning a new thread to keep doing it in the background
+            var thread = new Thread(() =>
+            {
+                while (!stoppingToken.IsCancellationRequested)
+                {
+                    try
                     {
                         _logger.LogInformation("Waiting for message...");
-                        
+
                         var message = _consumer.Consume(stoppingToken);
-                        
+
                         _logger.LogInformation(
                             "Consumed message '{@message}' at: '{topicOffset}'.",
                             JsonSerializer.Serialize(message.Value),
                             message.TopicPartitionOffset);
-                        
+
                         _consumer.Commit(); // note: committing every time can have a negative impact on performance
                     }
-                },
-                TaskCreationOptions.LongRunning);
+                    catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+                    {
+                        _logger.LogInformation("Shutting down gracefully.");
+                    }
+                    catch (Exception ex)
+                    {
+                        // TODO: implement error handling/retry logic
+                        // like this, the failed message will eventually be "marked as processed"
+                        // (commit to a newer offset) even though it failed
+                        _logger.LogError(ex, "Error occurred when consuming message!");
+                    }
+                }
 
+                tcs.SetResult(true);
+            })
+            {
+                IsBackground = true
+            };
+
+            thread.Start();
+
+            return tcs.Task;
+        }
 
         public override void Dispose()
         {
-            _consumer.Close();
-            _consumer.Dispose();
+            try
+            {
+                _consumer?.Close();
+            }
+            catch (Exception)
+            {
+                // no exceptions in Dispose :)
+            }
+
+            _consumer?.Dispose();
             base.Dispose();
         }
     }
